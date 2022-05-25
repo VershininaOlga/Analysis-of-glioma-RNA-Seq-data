@@ -1,0 +1,321 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib_venn import venn2
+import seaborn as sns
+from lifelines import KaplanMeierFitter
+
+
+def plot_venn_diagram_deg(n_deg_ps, n_deg_mtx, n_deg_common, labels, picture_name):
+    vd = venn2(subsets=[n_deg_ps, n_deg_mtx, n_deg_common], set_labels=labels, set_colors=("tomato","deepskyblue"))
+    
+    for text in vd.set_labels:
+        text.set_fontsize(18)
+    for text in vd.subset_labels:
+        text.set_fontsize(14)
+    vd.get_patch_by_id('11').set_color((0.77, 0.49, 0.49))
+    vd.get_patch_by_id('11').set_alpha(1)
+    vd.get_patch_by_id('10').set_alpha(0.7)
+    vd.get_patch_by_id('01').set_alpha(0.7)
+    
+    plt.savefig(f'{picture_name}.png', dpi=600, bbox_inches='tight')
+    
+    
+def plot_hist_deg(ps_fc, mtx_fc, picture_name):
+    fig, ax = plt.subplots(figsize=(12, 5))
+    
+    fontsize = 20
+    ticksize=15
+    bins = [-22, -10, -5, -2, 2, 5, 10, 22, 100, 1000, 5000, 10000, 22325]
+
+    hist_ps, bin_edges_ps = np.histogram(ps_fc, bins=bins)
+    hist_mtx, bin_edges_mxt = np.histogram(mtx_fc, bins=bins)
+    ax.bar(range(0, len(hist_ps)), hist_ps, width=1, color='deepskyblue', alpha=0.7, label='DC+PS-PDT')
+    ax.bar(range(0, len(hist_mtx)), hist_mtx, width=1, color='tomato', alpha=0.7, label='DC+MTX')
+    
+    xlabels = list(map(str, bin_edges_mxt))
+    ax.set_xticks(ticks=np.arange(-0.5, len(hist_mtx)-0.5, 1))
+    ax.set_xticklabels(xlabels[:-1], fontsize=ticksize)
+    ax.yaxis.set_tick_params(labelsize=ticksize)
+    ax.set_xlabel('Fold Change', size=fontsize)
+    ax.set_ylabel('Number of genes', size=fontsize)
+    ax.legend(loc = 'upper right', fontsize=fontsize)
+
+    fig.savefig(f'{picture_name}.png', dpi=600, bbox_inches='tight')
+    
+
+def star_for_pval(pvaladj):
+    if pvaladj <= 0.0001:
+        return '****'
+    elif pvaladj <= 0.001:
+        return '***'
+    elif pvaladj <= 0.01:
+        return '**'
+    elif pvaladj <= 0.05:
+        return '*'
+    else:
+        return 'ns'
+    
+
+def rename_and_replace_groups(data):
+    for k in range(0, len(data)):
+        if 'PS' in data['Group'][k]:
+            data.loc[k, 'Group'] = 'DC+PS-PDT'
+        elif 'MTX' in data['Group'][k]:
+            data.loc[k, 'Group'] = 'DC+MTX'
+        else:
+            data.loc[k, 'Group'] = 'Control'
+    data = pd.concat([data[data['Group'] == 'DC+PS-PDT'], data[data['Group'] == 'Control'], data[data['Group'] == 'DC+MTX']],
+                     axis=0, ignore_index=True)
+    return data
+
+
+def plot_boxplots_th17cells(genes, expr_levels, DSeq2_results_psvsdc, DSeq2_results_mtxvsdc, picture_name):
+    expr_levels = rename_and_replace_groups(expr_levels)
+    
+    sign_ps = [star_for_pval(DSeq2_results_psvsdc[DSeq2_results_psvsdc['Gene'] == gene]['padj'].values[0]) for gene in genes]
+    sign_mtx = [star_for_pval(DSeq2_results_mtxvsdc[DSeq2_results_mtxvsdc['Gene'] == gene]['padj'].values[0]) for gene in genes]
+
+    fig, ax = plt.subplots(1, len(genes), figsize=(12, 4.5))
+    
+    colors = ['deepskyblue', 'lightgreen', 'tomato']
+    sns.set_palette(sns.color_palette(colors))
+    
+    for k in range(0, len(genes)):
+        ax[k].set(title = genes[k])    
+        ax[k] = sns.boxplot(x='Group', y=genes[k], data=expr_levels,  ax=ax[k], showfliers=False)
+        ax[k].axes.set_title(genes[k], fontsize=14, fontweight=540)
+        ax[k].set_xlabel("Group", fontsize=14)
+        ax[k].set(ylim=(0, 9))
+        ax[k].set_ylabel(r"$log_{2} TPM$ gene expression", fontsize=14)
+        ax[k].tick_params(labelsize=11)
+        x1, x2 = 0, 1
+        y, h, col = max(expr_levels[genes[k]]) - 0.5, 0.2, "k"
+        ax[k].plot([x1, x1, x2, x2], [y, y+h, y+h, y], lw=1.5, c=col)
+        ax[k].text((x1+x2)*.5, y+h, sign_ps[k], ha="center", va="bottom", color=col, fontsize=15)
+        x1, x2 = 1, 2
+        y, h, col = max(expr_levels[genes[k]]) + 0.3, 0.2, "k"
+        ax[k].plot([x1, x1, x2, x2], [y, y+h, y+h, y], lw=1.5, c=col)
+        ax[k].text((x1+x2)*.5, y+h, sign_mtx[k], ha="center", va="bottom", color=col, fontsize=15)
+
+    fig.subplots_adjust(wspace=0.4)
+    
+    fig.savefig(f'{picture_name}.png', dpi=600, bbox_inches='tight')
+    
+    
+def make_surv_curve(times, os):
+    times_new = []
+    os_new = []
+    for k in range(0, len(times)-1):
+        times_new.append(times[k])
+        os_new.append(os[k])
+        
+        times_new.append(times[k+1])
+        os_new.append(os[k])
+    return times_new, os_new
+
+
+def plot_surv_curve_for_metagenes(data_osurv_high, data_osurv_low, osurv_sign, cell_type, picture_name):
+    time_h = [0] + list(data_osurv_high['TIME'].values) + [5000]
+    survival_h = [100] + list(data_osurv_high['SURVIVAL'].values * 100)
+    survival_h = survival_h + [survival_h[-1]]
+    time_h, survival_h = make_surv_curve(time_h, survival_h)
+
+    time_l = [0] + list(data_osurv_low['TIME'].values) + [5000]
+    survival_l = [100] + list(data_osurv_low['SURVIVAL'].values * 100)
+    survival_l = survival_l + [survival_l[-1]]
+    time_l, survival_l = make_surv_curve(time_l, survival_l)
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+    ax.plot(time_h, survival_h, 'r-', label='High', lw=2.5)
+    ax.plot(time_l, survival_l, 'b-', label='Low', lw=2.5)
+    ax.set_title(fr'$\bf{cell_type}$', size=20)
+    ax.set_xlabel('Time (days)', size=18)
+    ax.set_ylabel('Overall survival (OS), %', size=18)
+    ax.set_xticks([0, 1000, 2000, 3000, 4000, 5000])
+    ax.set_yticks(range(0, 110, 10))
+    ax.tick_params(labelsize=15)
+    ax.set_xlim([0, 5050])
+    ax.set_ylim([0, 102])
+    ax.axvline(x=730, c='k', ls='--', lw=2) 
+    ax.axvline(x=1825, c='k', ls='--', lw=2) 
+
+    ax.legend(bbox_to_anchor=(0.8,0.9,0,0), edgecolor='w', fontsize=15)
+    ax.text(x=4100, y=83, s=f'P = {round(osurv_sign["pval"][0], 2)}', fontsize=15)
+
+    plt.text(x=3345, y=73, s='HR (95% CI):', fontsize=15)
+    plt.text(x=3200, y=68, s=f'{osurv_sign["HR (95% CI)"][0]}:', fontsize=15)
+
+    MS_high = osurv_sign["MS_high"][0]
+    MS_low = osurv_sign["MS_low"][0]
+    delta_MS = ((MS_high - MS_low) / MS_high) * 100
+    delta_MS_str = f'+ {int(round(delta_MS))}' if delta_MS > 0 else f'{int(round(delta_MS))}'
+    ax.text(x=3200, y=60, s=r'$MS^{High}\;=\;$' + fr'${MS_high}$', fontsize=15, c='r')
+    ax.text(x=3250, y=55, s=r'$MS^{Low}\;=\;$' + fr'${MS_low}$', fontsize=15, c='b')
+    ax.text(x=3240, y=50, s=fr'$\% \Delta MS\;=\;{delta_MS_str}\%$', fontsize=15, c='k')
+    
+    ax.text(x=800, y=98, s='2 y.s.', fontsize=15)
+    ax.text(x=1900, y=98, s='5 y.s.', fontsize=15)
+    
+    fig.savefig(f'{picture_name}.png', dpi=600, transparent=True)
+    
+
+def create_pairs(cells):
+        pairs = []
+        for c in cells:
+            pairs.append(((c, 'Alive'), (c, 'Dead')))
+        return pairs
+    
+    
+def plot_boxplot_deconv_res(cells, mannwhitneyu_res, prepare_deconv_res, picture_name):
+    fig, ax = plt.subplots(figsize=(20, 5))
+    sns.boxplot(y='Fraction', x='Cell type', data=prepare_deconv_res, hue='status', ax=ax, palette={'Alive': 'g', 'Dead': 'r'},
+               flierprops={'marker': 'o', 'markerfacecolor': 'k'})
+    
+    mannwhitneyu_res['sign'] = [star_for_pval(pval) for pval in mannwhitneyu_res['padj'].values]
+    for k in range(0, len(cells)):
+        x1, x2 = k-0.2, k+0.2
+        y, h, col = prepare_deconv_res[prepare_deconv_res['Cell type'] == cells[k]]['Fraction'].max() + 0.05, 0.02, 'k'
+        ax.plot([x1, x1, x2, x2], [y, y+h, y+h, y], lw=1.5, c=col)
+        ax.text((x1+x2)*.5, y+h, mannwhitneyu_res[mannwhitneyu_res['cell'] == cells[k]]['sign'].values[0], 
+                ha='center', va='bottom', color=col, fontsize=15)
+
+    ax.set_xlabel('')
+    ax.set_xticklabels(cells, fontsize=16)
+    ax.set_ylabel('Fraction', fontsize=16)
+    ax.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8])
+    ax.set_yticklabels([0.0, 0.2, 0.4, 0.6, 0.8], fontsize=16)
+    ax.set_ylim([-0.04,  0.95])
+
+    ax.legend(fontsize=16, loc='upper left')
+
+    fig.savefig(f'{picture_name}.png', dpi=600, bbox_inches='tight') 
+
+    
+def plot_surv_roc_curves_for_predictive_model(data_low, data_high, roc_1y, roc_3y, roc_5y, aucs, picture_name):  
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6), gridspec_kw = {'wspace': 0.25})
+
+    kmf = KaplanMeierFitter()
+    kmf.fit(data_low['duration'], event_observed=data_low['observed'], label='low-risk')
+    kmf.survival_function_.plot(ax=ax1, c='steelblue', lw=2.5)
+    kmf.fit(data_high['duration'], event_observed=data_high['observed'], label='high-risk')
+    kmf.survival_function_.plot(ax=ax1, c='crimson', lw=2.5)
+
+    ax1.set_xlabel('Time (Days)', fontsize=15)
+    ax1.set_ylabel('Overall Survival', fontsize=15)
+    ax1.set_xlim([0, 6500])
+    ax1.set_ylim([0, 1])
+    ax1.set_xticklabels([0, 1000, 2000, 3000, 4000, 5000, 6000], fontsize=14)
+    ax1.set_yticklabels([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], fontsize=14)
+    ax1.legend(fontsize=14)
+
+
+    ax2.plot([0, 1], [0, 1], 'k-')
+    ax2.plot(roc_1y['specificity'], roc_1y['sensitivity'], '-', c='deeppink', 
+             label=f"1 year, AUC = {round(aucs[aucs['year'] == 1]['AUC'].values[0], 2)}", lw=2.5)
+    ax2.plot(roc_3y['specificity'], roc_3y['sensitivity'], '-', c='darkslateblue', 
+             label=f"3 year, AUC = {round(aucs[aucs['year'] == 3]['AUC'].values[0], 2)}", lw=2.5)
+    ax2.plot(roc_5y['specificity'], roc_5y['sensitivity'], '-', c='forestgreen', 
+             label=f"5 year, AUC = {round(aucs[aucs['year'] == 5]['AUC'].values[0], 2)}", lw=2.5)
+    ax2.set_xlabel('1 - Specificity', fontsize=15)
+    ax2.set_ylabel('Sensitivity', fontsize=15)
+    ax2.set_xlim([0, 1])
+    ax2.set_ylim([0, 1])
+    ax2.set_xticklabels([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], fontsize=14)
+    ax2.set_yticklabels([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], fontsize=14)
+    ax2.legend(fontsize=14)
+    
+    fig.savefig(f'{picture_name}.png', dpi=600, bbox_inches='tight')
+
+    
+def plot_log2fc_genes_from_predictive_model(sign_genes, DSeq2_results_AvsC, DSeq2_results_DvsC, 
+                                            DSeq2_results_psvsdc, DSeq2_results_mtxvsdc, picture_name):
+    
+    def point_for_gene(x, gene, Dseq2res, label, color, ax, fontsize):
+        log2fc = Dseq2res[Dseq2res['Gene'] == gene]['log2FoldChange']
+        ax.plot(x, log2fc, 'o', c=color)
+        ax.text(x + 0.05, log2fc + 0.05, label, fontsize=fontsize, c=color)
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+    fontsize = 14
+    ax.axhline(0.0, c='limegreen', ls='-.')
+    ax.text(1.5, 0.05, 'Control', c='limegreen', fontsize=fontsize)
+    ax.set_ylim([-2.5, 1])
+    ax.set_xlim([-0.2, len(sign_genes)])
+    
+    xlabels = []
+    for k in range(0, len(sign_genes)):
+        xlabels.append(f'{sign_genes[k]}\n{sign_genes[k].capitalize()}')
+        point_for_gene(k, sign_genes[k], DSeq2_results_AvsC, 'Alive', 'orange', ax, fontsize)
+        point_for_gene(k, sign_genes[k], DSeq2_results_DvsC, 'Dead', 'black', ax, fontsize)
+        point_for_gene(k, sign_genes[k], DSeq2_results_psvsdc, 'DC+PS-PDT', 'deepskyblue', ax, fontsize)
+        point_for_gene(k, sign_genes[k], DSeq2_results_mtxvsdc, 'DC+MTX', 'tomato', ax, fontsize)
+    ax.set_xticks(range(0, len(sign_genes)))
+    ax.set_xticklabels(xlabels, fontsize=fontsize)
+    ax.yaxis.set_tick_params(labelsize=fontsize)
+    ax.set_xlabel(r'$Gene$', fontsize=fontsize+2)
+    ax.set_ylabel(r'$log_{2}(Fold~Change)$', fontsize=fontsize+2)
+    ax.spines['right'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+
+    plt.savefig(f'{picture_name}.png', dpi=600, transparent=True)
+
+    
+def plot_risk_score_expr_level_for_genes_in_predictive_model(sign_genes, data_low, data_high, rs_median, picture_name):
+    
+    def point_colors(status):
+        colors = np.array(status)
+        colors[colors == 'Alive'] = 'orange'
+        colors[colors == 'Dead'] = 'black'
+        return colors  
+        
+    n_low = len(data_low)
+    n_high = len(data_high)
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), sharex=True, 
+                                        gridspec_kw = {'hspace': 0.3, 'height_ratios': [1, 1, 1]})
+
+    ax1.scatter(range(1, n_low + 1), data_low['risk_score'], c='steelblue', label='low-risk', s=12)
+    ax1.scatter(range(n_low + 1, n_low + n_high + 1), data_high['risk_score'], c='crimson', label='high-risk', s=12)
+    ax1.set_ylabel('Risk Score', fontsize=14, labelpad=38)
+    ax1.legend(fontsize=12)
+    ax1.set_yticks([6, 8, 10, 12])
+    ax1.set_yticklabels([6, 8, 10, 12], fontsize=14)
+    ax1.plot([1, n_low+1], [rs_median, rs_median], c='k', ls='--', lw=2)
+    ax1.plot([n_low+1, n_low+1], [np.min([np.min(data_low['risk_score']), np.min(data_high['risk_score'])]), rs_median], 
+             c='k', ls='--', lw=2)
+
+    ss = ax2.scatter(range(1, n_low + 1), data_low['duration'], c=point_colors(data_low['condition'].values), s=12)
+    ax2.scatter(range(n_low + 1, n_low + n_high + 1), data_high['duration'], c=point_colors(data_high['condition'].values), s=12)
+    leg = ax2.legend(['Alive', 'Dead'], fontsize=12)
+    m = 0
+    for marker in leg.legendHandles:
+        if m == 0:
+            marker.set_color('orange')
+        else:
+            marker.set_color('black')
+        m += 1
+
+    ax2.plot([n_low+1, n_low+1], [0, 6500], c='k', ls='--', lw=2, zorder=10)
+    ax2.set_ylabel('Time (Days)', fontsize=14, labelpad=19)
+    ax2.set_yticks([0, 2000, 4000, 6000])
+    ax2.set_yticklabels([0, 2000, 4000, 6000], fontsize=14)
+                
+    data = data_low[sign_genes].append(data_high[sign_genes])
+    data = data.astype('float64')
+    zscore = (data - np.mean(data, axis=0)) / np.std(data, axis=0)
+
+    im = ax3.pcolormesh(zscore.T, cmap='bwr', vmin=-4, vmax=4)
+    ax3.set_xlim([-5, 510])
+    ax3.set_ylabel('Genes', fontsize=14, labelpad=2)
+    ax3.set_yticks([0.5, 1.5, 2.5, 3.5])
+    ax3.set_yticklabels(sign_genes, fontsize=13)
+    ax3.set_xticks(range(0, 510, 40))
+    ax3.set_xticklabels(range(1, 511, 40), fontsize=14)
+    ax3.set_xlabel('Patients', fontsize=14)
+    cbaxes = fig.add_axes([0.2, 0.03, 0.2, 0.02])
+    cb = fig.colorbar(im, ax=ax3, cax=cbaxes, orientation='horizontal')
+    cb.ax.set_title('Row Z-score', fontsize=13, x=-0.3, y=-0.3)
+    cb.ax.tick_params(labelsize=12)
+
+    plt.savefig(f'{picture_name}.png', dpi=600, transparent=True)
