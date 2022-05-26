@@ -240,7 +240,7 @@ def plot_log2fc_genes_from_predictive_model(sign_genes, DSeq2_results_AvsC, DSeq
     fontsize = 14
     ax.axhline(0.0, c='limegreen', ls='-.')
     ax.text(1.5, 0.05, 'Control', c='limegreen', fontsize=fontsize)
-    ax.set_ylim([-2.5, 1])
+    ax.set_ylim([-2.0, 0.5])
     ax.set_xlim([-0.2, len(sign_genes)])
     
     xlabels = []
@@ -272,8 +272,8 @@ def plot_risk_score_expr_level_for_genes_in_predictive_model(sign_genes, data_lo
     n_low = len(data_low)
     n_high = len(data_high)
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), sharex=True, 
-                                        gridspec_kw = {'hspace': 0.3, 'height_ratios': [1, 1, 1]})
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 9), sharex=True, 
+                                        gridspec_kw = {'hspace': 0.5, 'height_ratios': [1, 1, 1]})
 
     ax1.scatter(range(1, n_low + 1), data_low['risk_score'], c='steelblue', label='low-risk', s=12)
     ax1.scatter(range(n_low + 1, n_low + n_high + 1), data_high['risk_score'], c='crimson', label='high-risk', s=12)
